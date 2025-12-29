@@ -185,6 +185,7 @@
         };
 
         # Build dependencies separately for caching (uses full workspace)
+        # This is used for workspace-wide operations like clippy and tests
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
         # Build the workspace (uses full source)
@@ -195,17 +196,35 @@
           }
         );
 
-        # Build individual packages with filtered source
-        mkPackage =
+        # Build per-package dependencies (only compiles deps that package needs)
+        mkPackageDeps =
           pname:
           let
             deps = packageDeps.${pname} or [ ];
             relevantCrates = [ pname ] ++ deps;
             filteredSrc = mkFilteredSrc relevantCrates;
           in
+          craneLib.buildDepsOnly {
+            src = filteredSrc;
+            pname = "${pname}-deps";
+            # Only build deps for this specific package
+            cargoExtraArgs = "-p ${pname}";
+            strictDeps = true;
+          };
+
+        # Build individual packages with their own filtered deps
+        mkPackage =
+          pname:
+          let
+            deps = packageDeps.${pname} or [ ];
+            relevantCrates = [ pname ] ++ deps;
+            filteredSrc = mkFilteredSrc relevantCrates;
+            packageCargoArtifacts = mkPackageDeps pname;
+          in
           craneLib.buildPackage {
             src = filteredSrc;
-            inherit cargoArtifacts pname;
+            cargoArtifacts = packageCargoArtifacts;
+            inherit pname;
             cargoExtraArgs = "-p ${pname}";
             strictDeps = true;
           };
