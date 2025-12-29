@@ -1,0 +1,8 @@
+[package]
+name = "pkg-b"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pkg-a = { path = "../pkg-a" }
+once_cell = "1.20"

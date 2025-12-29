@@ -1,0 +1,8 @@
+[package]
+name = "pkg-c"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pkg-a = { path = "../pkg-a" }
+itoa = "1.0"

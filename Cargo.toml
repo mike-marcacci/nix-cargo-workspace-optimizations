@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "pkg-d"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.metadata.crane]
+name = "nix-rust-example"
