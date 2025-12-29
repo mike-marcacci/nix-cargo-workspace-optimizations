@@ -97,6 +97,77 @@ run_test() {
     fi
 }
 
+# Check if a crate dependency is in the vendored deps for a package
+# This checks what's actually in the cargoArtifacts the package uses
+# Returns 0 if dep IS in vendor, 1 if not
+dep_in_vendor() {
+    local pkg="$1"
+    local dep="$2"
+    local temp_dir
+
+    # Build the package to ensure deps are built
+    nix build ".#${pkg}" --no-link 2>/dev/null
+
+    # Find the deps derivation and realize it
+    local deps_drv
+    deps_drv=$(nix path-info --derivation ".#${pkg}" -r 2>/dev/null | grep "deps-0.1.0.drv" | head -1)
+
+    if [[ -z "$deps_drv" ]]; then
+        echo "Warning: Could not find deps derivation" >&2
+        return 1
+    fi
+
+    # Realize the derivation to get the output path
+    local deps_out
+    deps_out=$(nix-store --realize "$deps_drv" 2>/dev/null)
+
+    if [[ -z "$deps_out" || ! -f "$deps_out/target.tar.zst" ]]; then
+        echo "Warning: Could not find deps output" >&2
+        return 1
+    fi
+
+    # Extract and check for the dep
+    temp_dir=$(mktemp -d)
+    zstd -d -c "$deps_out/target.tar.zst" | tar -xf - -C "$temp_dir" 2>/dev/null
+
+    # Check if the dep exists in the target directory
+    if ls "$temp_dir"/release/deps/*"${dep}"* 2>/dev/null | grep -q .; then
+        rm -rf "$temp_dir"
+        return 0  # Dep IS in vendor
+    else
+        rm -rf "$temp_dir"
+        return 1  # Dep is NOT in vendor
+    fi
+}
+
+# Run a dependency isolation test
+# Arguments: test_name pkg dep expect_in_deps ("yes" or "no")
+run_dep_test() {
+    local test_name="$1"
+    local pkg="$2"
+    local dep="$3"
+    local expect_in_deps="$4"  # "yes" or "no"
+
+    echo -e "\n${YELLOW}Test: ${test_name}${NC}"
+    echo "  Package: ${pkg}, Dependency: ${dep}, Expect in deps: ${expect_in_deps}"
+
+    echo -n "  Checking deps for ${pkg}... "
+    if dep_in_vendor "$pkg" "$dep"; then
+        actual="yes"
+    else
+        actual="no"
+    fi
+    echo "dep ${dep} in deps: ${actual}"
+
+    if [[ "$actual" == "$expect_in_deps" ]]; then
+        echo -e "  ${GREEN}PASS${NC}"
+        return 0
+    else
+        echo -e "  ${RED}FAIL${NC} (expected ${expect_in_deps}, got ${actual})"
+        return 1
+    fi
+}
+
 # Main test suite
 main() {
     echo "=== Nix Cache Optimization Tests ==="
@@ -108,6 +179,9 @@ main() {
     # Ensure clean starting state
     ensure_clean
     git add -A
+
+    echo ""
+    echo "--- Source Isolation Tests ---"
 
     # Test 1: pkg-d rebuild without changes should use cache
     if run_test "1: No-change rebuild" "pkg-d" "" "pkg-d" "hit"; then
@@ -139,6 +213,37 @@ main() {
 
     # Test 5: pkg-b after pkg-c change (pkg-a built first) should use cache
     if run_test "5: Unrelated sibling (pkg-a then pkg-b after pkg-c mod)" "pkg-a" "pkg-c" "pkg-b" "hit"; then
+        ((passed++))
+    else
+        ((failed++))
+    fi
+
+    echo ""
+    echo "--- Dependency Isolation Tests ---"
+
+    # Test 6: pkg-b closure should NOT include arrayvec (it doesn't need it)
+    if run_dep_test "6: pkg-b excludes arrayvec" "pkg-b" "arrayvec" "no"; then
+        ((passed++))
+    else
+        ((failed++))
+    fi
+
+    # Test 7: pkg-b closure SHOULD include once_cell (it needs it directly)
+    if run_dep_test "8: pkg-b includes once_cell" "pkg-b" "once_cell" "yes"; then
+        ((passed++))
+    else
+        ((failed++))
+    fi
+
+    # Test 8: pkg-b closure SHOULD include either (it needs it transitively)
+    if run_dep_test "7: pkg-b includes either" "pkg-b" "either" "yes"; then
+        ((passed++))
+    else
+        ((failed++))
+    fi
+
+    # Test 9: pkg-a closure should NOT include itoa (it doesn't need it)
+    if run_dep_test "9: pkg-a excludes itoa" "pkg-a" "itoa" "no"; then
         ((passed++))
     else
         ((failed++))
